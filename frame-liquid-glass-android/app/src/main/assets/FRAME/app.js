@@ -1,10 +1,11 @@
-/* FRAME mobile editor v0.3.0. All user media stays on this device. */
+/* FRAME mobile editor v0.3.1. All user media stays on this device. */
 (() => {
 'use strict';
 const E=window.FrameEngine;
 const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icons={
+ home:'<path d="m3 10 9-7 9 7v11h-6v-7H9v7H3V10Z"/>',
  search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
  archive:'<path d="M5 3h10l4 4v14H5V3Z"/><path d="M14 3v5h5M10 5h2m-2 3h2m-2 3h2m-2 3h2m-2 3h2"/>',
  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/>',
@@ -27,13 +28,14 @@ function hydrate(root=document){$$('[data-icon]',root).forEach(el=>{el.innerHTML
 const renderer=new E.Renderer(),store=new E.Store();
 let p=null,selection=null,mode='photo',panel='',adjustTab='light',typing=false,history=[],historyIndex=-1,snap=true;
 let saveTimer=null,saveChain=Promise.resolve(),dirty=false,revision=0,toastTimer=null,photoAction='new',exportBlob=null,exportName='',exportFormat='png',exportFactor=1;
-let preview=null,rawPreview=null,previewWanted=false,previewRunning=false,previewVersion=0,paintQueued=false,view={zoom:1,panX:0,panY:0,s:1,x:0,y:0,fit:1,width:0,height:0},before=false,guides={x:false,y:false};
+let preview=null,rawPreview=null,previewWanted=false,previewRunning=false,previewVersion=0,paintQueued=false,view={zoom:1,panX:0,panY:0,s:1,x:0,y:0,fit:1,width:0,height:0,fitted:false},before=false,guides={x:false,y:false};
 let adjustSelected={light:'exposure',color:'saturation',effects:'fade'};
 let pointers=new Map(),gesture=null,lastTap={id:null,time:0},dbOK=true;
 
 // Interruptible, critically damped panel motion. No timers that lock the interface.
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 const sheetState={y:0,velocity:0,target:0,frame:0,closing:false,drag:null,expanded:false,epoch:0};
+let fontLibraryOpen=false,fontLibraryTab='all',fontReturnFocus=null,libraryMotion=null,libraryEpoch=0;
 let typingView=null, lastToolbarKey='', gradientStop='end', viewportFrame=0;
 let motionFrom=null, motionTime=0, modalEpoch=0, modalAnimation=null;
 function visualTransition(){
@@ -55,14 +57,17 @@ function settleSheet(target,done){
  };sheetState.frame=requestAnimationFrame(step);
 }
 function updateDockLayout(){
- const dock=$('#editor-bottom');if(dock.hidden)return;
- const b=dock.getBoundingClientRect(),editorBox=$('#editor').getBoundingClientRect();
- $('#editor').style.setProperty('--dock-bottom',`${Math.max(0,editorBox.bottom-b.top-1)}px`);
- requestPaint();
+ $('#editor').style.setProperty('--dock-bottom','0px');requestPaint();
+}
+function contextualTabs(key){
+ const text=sel()?.type==='text'&&['fonts','type','color','spacing'].includes(key);
+ if(text)return `<nav class="sheet-tabs" aria-label="Outils texte">${[['fonts','Font'],['type','Gaya'],['color','Warna'],['spacing','Jarak']].map(([k,label])=>`<button class="${key===k?'active':''}" data-action="panel-${k}" aria-pressed="${key===k}">${label}</button>`).join('')}</nav>`;
+ if(['adjust','presets','crop'].includes(key))return `<nav class="sheet-tabs" aria-label="Alat foto">${[['adjust','Atur'],['presets','Filter'],['crop','Crop']].map(([k,label])=>`<button class="${key===k?'active':''}" data-action="panel-${k}">${label}</button>`).join('')}</nav>`;
+ return '';
 }
 function panelReady(){
  const el=$('#panel');if(el.querySelector('.sheet-content'))return;
- el.innerHTML=`<button class="sheet-grip" data-action="expand-panel" aria-label="Perluas atau ringkas panel" title="Perluas atau ringkas panel"><span></span></button><header class="sheet-head"><h2></h2><button class="sheet-done" data-action="close-panel" aria-label="Selesai">${icon('check')}</button></header><div class="sheet-content"></div>`;
+ el.innerHTML=`<button class="sheet-grip" data-action="expand-panel" aria-label="Perluas atau ringkas panel" title="Perluas atau ringkas panel"><span></span></button><header class="sheet-head"><h2></h2><button class="sheet-done" data-action="close-panel" aria-label="Selesai">${icon('check')}</button></header><div class="sheet-tabs-wrap"></div><div class="sheet-content"></div>`;
  el.querySelector('.sheet-grip').setAttribute('aria-label','Perluas atau ringkas panel');
 }
 function sheetExpansion(value){if(!panel)return;visualTransition();sheetState.expanded=value;$('#panel').classList.toggle('expanded',value);$('#panel .sheet-grip')?.setAttribute('aria-expanded',String(value));requestPaint();}
@@ -87,26 +92,30 @@ async function pumpPreview(){if(previewRunning||!p||!previewWanted)return;previe
 function paint(){
  if(!p||$('#editor').hidden)return;
  const box=$('#stage').getBoundingClientRect(),w=box.width,h=box.height;if(w<1||h<1)return;
- const ratio=Math.min(devicePixelRatio||1,2),stageBottom=box.bottom;
- let occupied=0;
- if(typing){const b=$('#typing').getBoundingClientRect();occupied=Math.max(0,stageBottom-b.top);}
- else{const d=$('#editor-bottom').getBoundingClientRect();occupied=Math.max(0,stageBottom-d.top)+10;
-   if(!$('#panel').hidden){const ph=$('#panel').offsetHeight;occupied+=Math.max(0,ph-sheetState.y-4);}}
- const contentH=Math.max(78,h-occupied);
- $('#stage').style.setProperty('--controls-bottom',`${occupied+4}px`);
- view.width=w;view.height=h;view.contentHeight=contentH;
- view.fit=Math.max(.01,Math.min((w-36)/p.w,(contentH-43)/p.h));
- let target={s:view.fit*view.zoom,x:0,y:0};target.x=(w-p.w*target.s)/2+view.panX;target.y=(contentH-32-p.h*target.s)/2+view.panY;
- if(motionFrom&&!reducedMotion.matches&&!sheetState.drag){const t=Math.min(1,(performance.now()-motionTime)/330),ease=1-Math.pow(1-t,4);
-  view.s=motionFrom.s+(target.s-motionFrom.s)*ease;view.x=motionFrom.x+(target.x-motionFrom.x)*ease;view.y=motionFrom.y+(target.y-motionFrom.y)*ease;
-  if(t<1)requestPaint();else motionFrom=null;
- }else{view.s=target.s;view.x=target.x;view.y=target.y;motionFrom=null;}
+ const ratio=Math.min(devicePixelRatio||1,2);
+ let occupied=116;
+ if(typing)occupied=Math.max(0,box.bottom-$('#typing').getBoundingClientRect().top)+10;
+ else if(!$('#panel').hidden)occupied=Math.max(0,$('#panel').offsetHeight-sheetState.y);
+ const usable=Math.max(70,h-occupied-96);view.width=w;view.height=h;view.contentHeight=h;
+ const fitAll=typing||view.fitted;view.centerY=fitAll?88+usable/2:h/2;
+ view.fit=Math.max(.01,Math.min((w-(fitAll?32:0))/p.w,(fitAll?usable:h)/p.h));
+ let target={s:view.fit*view.zoom,x:0,y:0};target.x=(w-p.w*target.s)/2+view.panX;target.y=(fitAll?88+(usable-p.h*target.s)/2:(h-p.h*target.s)/2)+view.panY;
+ // An open panel overlays the photo. Keep the selected text above it without changing the document.
+ const selectedLayer=sel();const layer=selectedLayer?.type==='gradient'?p.layers.find(l=>l.type==='text'&&l.visible):selectedLayer;
+ if(!fitAll&&layer&&layer.type==='text'&&!$('#panel').hidden&&view.zoom===1){
+  const bounds=E.layout(layer),bottom=target.y+(layer.y+bounds.h)*target.s,top=target.y+layer.y*target.s;
+  const delta=Math.max(0,bottom-(h-occupied-30));target.y-=Math.min(delta,Math.max(0,top-115));
+ }
+ if(motionFrom&&!reducedMotion.matches&&!sheetState.drag){const t=Math.min(1,(performance.now()-motionTime)/360),ease=1-Math.pow(1-t,4);view.s=motionFrom.s+(target.s-motionFrom.s)*ease;view.x=motionFrom.x+(target.x-motionFrom.x)*ease;view.y=motionFrom.y+(target.y-motionFrom.y)*ease;if(t<1)requestPaint();else motionFrom=null;}
+ else{view.s=target.s;view.x=target.x;view.y=target.y;motionFrom=null;}
  if(gesture?.viewSnapshot&&pointers.size===1){view.s=gesture.viewSnapshot.s;view.x=gesture.viewSnapshot.x;view.y=gesture.viewSnapshot.y;view.fit=gesture.viewSnapshot.fit;}
  for(const c of [$('#artwork'),$('#interaction')])if(c.width!==Math.round(w*ratio)||c.height!==Math.round(h*ratio)){c.width=Math.round(w*ratio);c.height=Math.round(h*ratio);}
- const c=$('#artwork').getContext('2d');c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,w,h);
- c.save();c.translate(view.x,view.y);c.scale(view.s,view.s);c.beginPath();c.rect(0,0,p.w,p.h);c.clip();renderer.compose(c,p,before?rawPreview:preview,{before});c.restore();
+ const c=$('#artwork').getContext('2d');c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,w,h);c.save();c.translate(view.x,view.y);c.scale(view.s,view.s);c.beginPath();c.rect(0,0,p.w,p.h);c.clip();renderer.compose(c,p,before?rawPreview:preview,{before});c.restore();
  const o=$('#interaction').getContext('2d');o.setTransform(ratio,0,0,ratio,0,0);o.clearRect(0,0,w,h);o.save();o.translate(view.x,view.y);o.scale(view.s,view.s);drawSelection(o);o.restore();
- $('#zoom-label').textContent=`${Math.round(view.zoom*100)}%`;
+ $('#zoom-label').textContent=view.zoom===1?'':`${Math.round(view.zoom*100)}%`;
+ $('#stage').style.setProperty('--controls-bottom',`${Math.min(h-100,occupied+12)}px`);
+ $('#editor').classList.toggle('fit-view',!!view.fitted);
+ const label=$('#fit-button .fit-label');if(label)label.textContent=view.fitted?'Penuh':'Utuh';
 }
 function layerBox(l){return l.type==='text'?E.layout(l):{w:l.w,h:l.h};}
 function rotatePoint(x,y,degrees){const t=degrees*Math.PI/180;return{x:x*Math.cos(t)-y*Math.sin(t),y:x*Math.sin(t)+y*Math.cos(t)};}
@@ -119,8 +128,8 @@ function drawSelection(c){if(guides.x||guides.y){c.strokeStyle='#007aff';c.lineW
 function hitLayer(pt){for(const l of [...p.layers].reverse()){if(!l.visible||l.locked||l.type==='gradient')continue;const local=localPoint(pt,l),b=layerBox(l);if(local.x>=-4/view.s&&local.y>=-4/view.s&&local.x<=b.w+4/view.s&&local.y<=b.h+4/view.s)return l;}return null;}
 function selectLayer(id,keepPanel=false){selection=id;const l=sel();if(l)mode=l.type==='gradient'?'photo':'design';if(!keepPanel)closePanel();updateToolbar();requestPaint();}
 function tool(name,label,action,active=false){return `<button class="tool ${active?'active':''} ${action==='delete'?'danger':''}" data-action="${action}" aria-label="${esc(label)}">${icon(name)}<span>${esc(label)}</span></button>`;}
-function updateToolbar(){const l=sel();let items;if(l?.type==='text')items=[['edit','Edit teks','edit-text'],['font','Font','panel-fonts'],['style','Gaya','panel-type'],['color','Warna','panel-color'],['spacing','Jarak','panel-spacing'],['position','Posisi','panel-position'],['more','Lainnya','panel-more']];else if(l?.type==='image')items=[['image','Ganti','replace-layer'],['adjust','Opasitas','panel-image'],['position','Posisi','panel-position'],['layers','Layers','panel-layers'],['more','Lainnya','panel-more']];else if(l?.type==='gradient')items=[['gradient','Gradien','panel-gradient'],['layers','Layers','panel-layers'],['duplicate','Duplikat','duplicate'],['trash','Hapus','delete']];else if(mode==='photo')items=[['image','Foto','replace-photo'],['preset','Presets','panel-presets'],['adjust','Cahaya','panel-adjust'],['gradient','Gradien','add-gradient'],['crop','Crop','panel-crop']];else items=[['text','Teks','add-text'],['image','Gambar','add-image'],['layers','Layers','panel-layers'],['canvas','Kanvas','panel-canvas']];const toolbarKey=items.map(i=>i[2]).join('|');
- if(toolbarKey!==lastToolbarKey){lastToolbarKey=toolbarKey;$('#toolbar').innerHTML=items.map(([i,t,a])=>tool(i,t,a,panel&&a===`panel-${panel}`)).join('');
+function updateToolbar(){const l=sel();let items;if(l?.type==='text')items=[['edit','Edit teks','edit-text'],['font','Font','panel-fonts'],['style','Gaya','panel-type'],['color','Warna','panel-color'],['spacing','Jarak','panel-spacing'],['position','Posisi','panel-position'],['more','Lainnya','panel-more']];else if(l?.type==='image')items=[['image','Ganti','replace-layer'],['adjust','Opasitas','panel-image'],['position','Posisi','panel-position'],['layers','Layers','panel-layers'],['more','Lainnya','panel-more']];else if(l?.type==='gradient')items=[['gradient','Gradien','panel-gradient'],['layers','Layers','panel-layers'],['duplicate','Duplikat','duplicate'],['trash','Hapus','delete']];else if(mode==='photo')items=[['adjust','Atur','panel-adjust'],['preset','Filter','panel-presets'],['text','Teks','add-text'],['gradient','Gradien','add-gradient'],['more','Lainnya','panel-more']];else items=[['text','Teks','add-text'],['image','Gambar','add-image'],['layers','Layers','panel-layers'],['canvas','Kanvas','panel-canvas'],['more','Lainnya','panel-more']];const toolbarKey=items.map(i=>i[2]).join('|');
+ if(toolbarKey!==lastToolbarKey){lastToolbarKey=toolbarKey;const prior=$('#toolbar'),next=prior.cloneNode(false);prior.getAnimations().forEach(a=>a.cancel());next.innerHTML=items.map(([i,t,a])=>tool(i,t,a,panel&&a===`panel-${panel}`)).join('');prior.replaceWith(next);
   if(!reducedMotion.matches)$('#toolbar').animate([{opacity:.35,transform:'translateY(5px)'},{opacity:1,transform:'translateY(0)'}],{duration:170,easing:'ease-out'});
  }else $$('#toolbar .tool').forEach(b=>b.classList.toggle('active',!!panel&&b.dataset.action===`panel-${panel}`));
  $('#toolbar').classList.toggle('many',items.length>5);$$('#mode-switch button').forEach(b=>b.classList.toggle('active',b.dataset.action===`mode-${mode}`));$('#editor-bottom').hidden=typing;$('#editor').classList.toggle('has-panel',!!panel&&!typing);$('#editor').classList.toggle('is-typing',typing);$('#editor').dataset.panel=panel;$('#editor').classList.toggle('has-selection',!!l);$('#selection-context').hidden=!l;if(l)$('#selection-label').innerHTML=icon(l.type==='text'?'text':l.type==='gradient'?'gradient':'image')+`<span>${esc(l.type==='text'?(l.text||'Teks baru').split('\n')[0].slice(0,26):l.type==='gradient'?'Gradien':'Gambar')}</span>`;$('#mode-switch').hidden=!!l;updateDockLayout();$$('#toolbar .tool').forEach(b=>b.setAttribute('aria-pressed',String(b.classList.contains('active'))));$$('#mode-switch button').forEach(b=>b.setAttribute('aria-pressed',String(b.classList.contains('active'))));}
@@ -133,9 +142,9 @@ case 'adjust':{
  const fields=adjustTab==='light'?[['Gelap / terang','exposure',-2,2,.05,'EV','sun'],['Kontras','contrast',-100,100,1,'','preset'],['Highlights','highlights',-100,100,1,'','sun'],['Shadows','shadows',-100,100,1,'','gradient']]:adjustTab==='color'?[['Saturasi','saturation',-100,100,1,'','color'],['Suhu warna','temperature',-100,100,1,'','sun'],['Tint','tint',-100,100,1,'','color']]:[['Fade','fade',0,100,1,'','gradient'],['Grain','grain',0,100,1,'','effects'],['Vignette','vignette',0,100,1,'','preset']];
  const selected=fields.find(f=>f[1]===adjustSelected[adjustTab])||fields[0];
  return {title:'Sesuaikan foto',html:`<div class="tabs">${[['light','Cahaya'],['color','Warna'],['effects','Efek']].map(([v,t])=>`<button class="${adjustTab===v?'active':''}" data-action="adjust-tab" data-value="${v}">${t}</button>`).join('')}</div><div class="adjust-options">${fields.map(([t,k,min,max,step,u,i])=>`<button class="adjust-option ${k===selected[1]?'active':''}" data-action="adjust-control" data-value="${k}" aria-label="${t}">${icon(i)}<span>${t==='Gelap / terang'?'Terang':t}</span></button>`).join('')}</div><div class="adjustment-one">${control(selected[0],'a.'+selected[1],p.adjust[selected[1]],selected[2],selected[3],selected[4],selected[5])}<div class="ruler" aria-hidden="true"></div></div><button class="text-button adjust-reset" data-action="reset-adjust">${icon('reset')} Reset adjustment</button>`};}
-case 'type':if(!l||l.type!=='text')return null;return {title:'Tipografi',html:`<span class="group-label">FONT</span><button class="font-current" data-action="panel-fonts"><span style="font-family:${esc(l.font)}">${esc(fontName(l.font))}</span>${icon('chevron')}</button><div class="row equal">${choice('Regular','weight-400',l.weight===400)}${choice('<b>Bold</b>','weight-700',l.weight>=600)}${choice('<i>Miring</i>','italic',l.italic)}</div>${control('Ukuran font','l.size',l.size,8,600,1,'px')}${alignButtons(l)}<p class="sheet-note">Bold dan miring dapat disintesis browser bila font tidak menyediakan varian aslinya.</p>`};
+case 'type':if(!l||l.type!=='text')return null;return {title:'Tipografi',html:`<span class="group-label">FONT</span><button class="font-current" data-action="open-font-library"><span style="font-family:${esc(l.font)}">${esc(fontName(l.font))}</span>${icon('chevron')}</button><div class="row equal">${choice('Regular','weight-400',l.weight===400)}${choice('<b>Bold</b>','weight-700',l.weight>=600)}${choice('<i>Miring</i>','italic',l.italic)}</div>${control('Ukuran font','l.size',l.size,8,600,1,'px')}${alignButtons(l)}<p class="sheet-note">Bold dan miring dapat disintesis browser bila font tidak menyediakan varian aslinya.</p>`};
 case 'spacing':if(!l||l.type!=='text')return null;return {title:'Jarak & paragraf',html:`${control('Jarak huruf','l.spacing',l.spacing,-10,60,.5,'px')}${control('Jarak baris','l.lineHeight',l.lineHeight,.75,2.5,.05,'x')}${control('Lebar kotak teks','l.w',l.w,40,p.w*1.5,1,'px')}${alignButtons(l)}<p class="sheet-note">Lebar kotak mengatur pindah baris, bukan memperbesar huruf.</p>`};
-case 'fonts':if(!l||l.type!=='text')return null;return {title:'Koleksi font',html:`<button class="secondary import-font" data-action="import-font"><span>${icon('plus')} Tambah font</span><small>FILE / ZIP</small></button><p class="font-upload-note">TTF, OTF, WOFF, WOFF2, atau satu paket ZIP.</p><div class="search-wrap">${icon('search')}<input class="font-search" id="font-search" placeholder="Cari font..." aria-label="Cari font"></div><div class="font-list" id="font-list">${fontOptions()}</div><p class="sheet-note">Font impor tersimpan bersama proyek di perangkat. Font sistem bisa berbeda antarperangkat.</p>`};
+case 'fonts':if(!l||l.type!=='text')return null;return {title:'Teks',html:`<div class="font-quick-head"><span>Font</span><button class="text-button" data-action="open-font-library">Semua font ${icon('chevron')}</button></div><div class="quick-fonts" id="font-list">${quickFonts()}</div><button class="font-inline-import" data-action="open-font-library">${icon('plus')} Tambah font dari file / ZIP</button>`};
 case 'color':if(!l||l.type!=='text')return null;return {title:'Warna teks',html:colorControls(l.color,'l.color')+control('Opasitas','l.opacity',l.opacity,0,100,1,'%')+`<p class="sheet-note">Warna teks berdiri sendiri, tidak berubah oleh preset foto.</p>`};
 case 'position':if(!l||l.type==='gradient')return null;return {title:'Posisi presisi',html:`${control('Posisi X','l.x',Math.round(l.x),-p.w,p.w*2,1,'px')}${control('Posisi Y','l.y',Math.round(l.y),-p.h,p.h*2,1,'px')}${control('Rotasi','l.rotation',Math.round(l.rotation),-180,180,1,'deg')}<div class="row equal">${choice('Tengah X','center-x')}${choice('Tengah Y','center-y')}${choice('Luruskan','reset-rotation')}</div><label class="check-row">Snap ke tengah<input type="checkbox" id="snap-toggle" ${snap?'checked':''}></label>`};
 case 'gradient':if(!l||l.type!=='gradient')return null;return {title:'Gradien',html:gradientControls(l)};
@@ -143,14 +152,16 @@ case 'crop':return {title:'Crop & komposisi',html:`${ratioChoices()}${p.photo?`$
 case 'canvas':return {title:'Kanvas',html:`${ratioChoices()}<span class="group-label">UKURAN KUSTOM</span><div class="row"><input id="custom-width" class="text-field" type="number" aria-label="Lebar kanvas" min="128" max="4096" value="${p.w}"><span class="muted">x</span><input id="custom-height" class="text-field" type="number" aria-label="Tinggi kanvas" min="128" max="4096" value="${p.h}"></div><button class="secondary" data-action="custom-size">Terapkan ukuran</button><p class="sheet-note">Satuan piksel; maksimal 4096 per sisi. Posisi layer mengikuti proporsi kanvas.</p>`};
 case 'layers':return {title:'Layers',html:layersHTML()};
 case 'image':if(!l||l.type!=='image')return null;return {title:'Gambar tambahan',html:`${control('Opasitas','l.opacity',l.opacity,0,100,1,'%')}${control('Lebar','l.w',l.w,20,p.w*2,1,'px')}<div class="row equal">${choice('Ganti gambar','replace-layer')}${choice('Duplikat','duplicate')}</div><p class="sheet-note">Ukuran berubah proporsional. Filter foto utama tidak diterapkan ke gambar tambahan.</p>`};
-case 'more':if(!l)return null;return {title:'Layer pilihan',html:`<div class="row equal">${choice(icon('duplicate')+' Duplikat','duplicate')}${choice(icon('trash')+' Hapus','delete')}</div><div class="row equal">${choice(icon(l.locked?'unlock':'lock')+(l.locked?' Buka kunci':' Kunci'),'lock-selected')}${choice(icon('layers')+' Urutan','panel-layers')}</div>${l.type==='text'?`${control('Bayangan','l.shadow',l.shadow,0,60,1,'px')}${control('Outline hitam','l.stroke',l.stroke,0,12,.5,'px')}<label class="check-row">Latar gelap teks<input type="checkbox" data-toggle="background" ${l.background?'checked':''}></label>`:''}`};
+case 'more':if(!l)return {title:'Alat lainnya',html:`<div class="tool-grid">${[['image','Ganti foto','replace-photo'],['image','Tambah gambar','add-image'],['layers','Layers','panel-layers'],['crop','Crop','panel-crop'],['canvas','Kanvas','panel-canvas'],['folder','Proyek & backup','project']].map(([i,t,a])=>tool(i,t,a)).join('')}</div>`};return {title:'Layer pilihan',html:`<div class="row equal">${choice(icon('duplicate')+' Duplikat','duplicate')}${choice(icon('trash')+' Hapus','delete')}</div><div class="row equal">${choice(icon(l.locked?'unlock':'lock')+(l.locked?' Buka kunci':' Kunci'),'lock-selected')}${choice(icon('layers')+' Urutan','panel-layers')}</div>${l.type==='text'?`${control('Bayangan','l.shadow',l.shadow,0,60,1,'px')}${control('Outline hitam','l.stroke',l.stroke,0,12,.5,'px')}<label class="check-row">Latar gelap teks<input type="checkbox" data-toggle="background" ${l.background?'checked':''}></label>`:''}`};
 default:return null;}}
 function openPanel(key){
  if(typing)finishTyping();const info=panelHTML(key);if(!info){closePanel();return;}
  const el=$('#panel'),previous=panel,wasVisible=!el.hidden,previousScroll=el.querySelector('.sheet-content')?.scrollTop||0;
- sheetState.closing=false;panelReady();$('#panel .sheet-content').inert=false;panel=key;$('#editor').dataset.lastPanel=key;el.hidden=false;el.inert=false;
+ if(previous!==key&&wasVisible)visualTransition();sheetState.closing=false;panelReady();$('#panel .sheet-content').inert=false;panel=key;$('#editor').dataset.lastPanel=key;el.hidden=false;el.inert=false;
  el.classList.toggle('font-sheet',key==='fonts');el.setAttribute('aria-label',info.title);
- el.querySelector('.sheet-head h2').textContent=info.title;
+ el.querySelector('.sheet-head h2').textContent=(sel()?.type==='text'&&['fonts','type','color','spacing'].includes(key))?'Teks':info.title;
+ el.querySelector('.sheet-tabs-wrap').innerHTML=contextualTabs(key);
+ $('#editor').classList.add('panel-visible');
  const content=el.querySelector('.sheet-content');const opened=previous===key?[...content.querySelectorAll('details[open]')].map(d=>d.className):[];
  content.innerHTML=info.html.replace(/<p class="sheet-note">(.*?)<\/p>/g,'<details class="panel-help"><summary>Catatan alat</summary><p>$1</p></details>');
  opened.forEach(c=>{const d=[...content.querySelectorAll('details')].find(d=>d.className===c);if(d)d.open=true;});content.scrollTop=previous===key?previousScroll:0;
@@ -163,17 +174,19 @@ function openPanel(key){
 }
 function closePanel(instant=false){
  const el=$('#panel');panel='';sheetState.closing=true;if(el.querySelector('.sheet-content'))el.querySelector('.sheet-content').inert=true;updateToolbar();
- const finish=()=>{el.hidden=true;el.inert=false;sheetState.closing=false;sheetState.expanded=false;el.classList.remove('expanded');sheetState.y=0;el.style.transform='';requestPaint();};
+ const finish=()=>{el.hidden=true;el.inert=false;$('#editor').classList.remove('panel-visible');sheetState.closing=false;sheetState.expanded=false;el.classList.remove('expanded');sheetState.y=0;el.style.transform='';requestPaint();};
  if(instant||el.hidden){stopSheet();++sheetState.epoch;finish();}else settleSheet(el.offsetHeight+18,finish);
 }
 function gradientControls(l){
- const duo=l.gradientMode==='duotone';if(!duo)gradientStop='end';
- const start=l.startColor||l.color,end=l.color,key=gradientStop==='start'?'l.startColor':'l.color',value=gradientStop==='start'?start:end;
+ const duo=l.gradientMode==='duotone';if(!duo)gradientStop='end';const start=l.startColor||l.color,end=l.color,key=gradientStop==='start'?'l.startColor':'l.color',value=gradientStop==='start'?start:end;
+ const colors=['#ff9500','#ff70ad','#af52de','#40a6ed','#4dceac','#000000','#ffffff'];
+ const angle=(Math.atan2((l.y2-l.y1)*p.h,(l.x2-l.x1)*p.w)*180/Math.PI+360)%360;
  return `<div class="tabs gradient-modes" aria-label="Jenis gradien">${[['fade','Warna ke transparan'],['duotone','Dua warna']].map(([v,t])=>`<button data-action="gradient-mode" data-value="${v}" class="${(duo?'duotone':'fade')===v?'active':''}" aria-pressed="${(duo?'duotone':'fade')===v}">${t}</button>`).join('')}</div>
  <div class="gradient-strip checkered"><div class="gradient-preview" style="background:${layerGradientCSS(l)}"></div></div>
- <div class="gradient-stops"><button class="gradient-stop ${gradientStop==='start'?'active':''}" data-action="gradient-stop" data-value="start" ${!duo?'disabled':''}><span class="stop-dot ${!duo?'checkered':''}" ${duo?`style="background:${start}"`:''}></span><span><small>AWAL</small>${duo?'Warna 1':'Transparan'}</span></button><button class="icon-button gradient-swap" data-action="gradient-swap" aria-label="${duo?'Tukar kedua warna':'Balik arah gradien'}">${icon('compare')}</button><button class="gradient-stop ${gradientStop==='end'?'active':''}" data-action="gradient-stop" data-value="end"><span class="stop-dot" style="background:${end}"></span><span><small>AKHIR</small>${duo?'Warna 2':'Warna'}</span></button></div>
- ${colorControls(value,key,true)}${control('Opasitas','l.opacity',l.opacity,0,100,1,'%')}
- <details class="gradient-advanced"><summary>Arah & panjang fade ${icon('chevron')}</summary><div class="row equal">${choice(icon('down'),'gradient-bottom',false,'aria-label="Arah bawah"')}${choice(icon('up'),'gradient-top',false,'aria-label="Arah atas"')}${choice('Kiri','gradient-left')}${choice('Kanan','gradient-right')}</div>${control('Panjang fade','gradient-length',Math.round(Math.hypot(l.x2-l.x1,l.y2-l.y1)*100),5,140,1,'%')}<p class="sheet-note">Geser kedua titik di foto untuk arah bebas. Semua warna dapat diubah; foto asli tetap utuh.</p></details>`;
+ <div class="gradient-stops"><button class="gradient-stop ${gradientStop==='start'?'active':''}" data-action="gradient-stop" data-value="start" aria-label="${duo?'Pilih warna awal':'Ujung transparan'}" ${!duo?'disabled':''}><span class="stop-dot ${!duo?'checkered':''}" ${duo?`style="background:${start}"`:''}></span></button><button class="icon-button gradient-swap" data-action="gradient-swap" aria-label="${duo?'Tukar kedua warna':'Balik arah gradien'}">${icon('compare')}</button><button class="gradient-stop ${gradientStop==='end'?'active':''}" data-action="gradient-stop" data-value="end" aria-label="Pilih warna akhir"><span class="stop-dot" style="background:${end}"></span></button></div>
+ <div class="swatches gradient-swatches" aria-label="Warna gradien">${colors.map(c=>`<button class="swatch ${c===value?'active':''}" style="--swatch:${c}" data-action="swatch" data-color-prop="${key}" data-value="${c}" aria-label="Warna ${c}"><span></span></button>`).join('')}<label class="gradient-add-color" title="Warna bebas">${icon('plus')}<input type="color" data-prop="${key}" value="${value}" aria-label="Warna gradien bebas"></label></div>
+ <div class="gradient-sliders">${control('Sudut','gradient-angle',Math.round(angle),0,360,1,'deg')}${control('Opasitas','l.opacity',l.opacity,0,100,1,'%')}${control('Fade','gradient-length',Math.round(Math.hypot(l.x2-l.x1,l.y2-l.y1)*100),5,140,1,'%')}</div>
+ <details class="gradient-advanced"><summary>Kode warna & arah ${icon('chevron')}</summary><label class="hex-field"><span>HEX</span><input class="color-field" value="${value.toUpperCase()}" maxlength="7" aria-label="Kode warna HEX" data-hex="${key}" spellcheck="false"></label><div class="row equal">${choice(icon('down'),'gradient-bottom',false,'aria-label="Arah bawah"')}${choice(icon('up'),'gradient-top',false,'aria-label="Arah atas"')}${choice('Kiri','gradient-left')}${choice('Kanan','gradient-right')}</div><p class="sheet-note">Ketuk titik di strip untuk mengganti warna awal atau akhir. Kedua titik di foto bisa digeser.</p></details>`;
 }
 function syncGradientPreview(){
  const l=sel();if(panel!=='gradient'||!l)return;
@@ -185,6 +198,25 @@ function syncGradientPreview(){
 function fontName(family){return p?.fonts.find(f=>f.family===family)?.name||family;}
 const SYSTEM_FONTS=['Georgia','Arial','Times New Roman','Verdana','Trebuchet MS','Courier New'];
 function fontOptions(query=''){const l=sel();const sample=(l?.text||'Aa, punya cerita.').split('\n')[0].slice(0,28);return [...(p.fonts||[]).map(f=>({name:f.name,family:f.family,custom:true})),...SYSTEM_FONTS.map(f=>({name:f,family:f}))].filter(f=>f.name.toLowerCase().includes(query.toLowerCase())).map(f=>`<button class="font-option ${l?.font===f.family?'active':''}" data-action="choose-font" data-value="${esc(f.family)}" aria-label="Pakai ${esc(f.name)}"><span class="font-option-copy"><span class="font-sample" style="font-family:${esc(f.family)}">${esc(sample)}</span><span class="font-meta">${esc(f.name)}</span></span>${l?.font===f.family?icon('check'):`<small>${f.custom?'IMPOR':'SISTEM'}</small>`}</button>`).join('')||'<p class="empty-note">Font tidak ditemukan.</p>';}
+function quickFonts(){const l=sel();return [...(p.fonts||[]).map(f=>({name:f.name,family:f.family})),...SYSTEM_FONTS.map(f=>({name:f,family:f}))].map(f=>`<button class="quick-font ${l?.font===f.family?'active':''}" data-action="choose-font" data-value="${esc(f.family)}" aria-label="Pakai ${esc(f.name)}"><span style="font-family:${esc(f.family)}">Aa</span><small>${esc(f.name)}</small></button>`).join('');}
+function renderFontLibrary(){if(!fontLibraryOpen||!p)return;const q=($('#library-search')?.value||'').toLowerCase();const l=sel();const list=[...(p.fonts||[]).map(f=>({...f,custom:true})),...SYSTEM_FONTS.map(f=>({name:f,family:f,custom:false}))].filter(f=>(fontLibraryTab==='all'||(fontLibraryTab==='imported'?f.custom:!f.custom))&&f.name.toLowerCase().includes(q));
+ $('#library-count').textContent=list.length;$$('.library-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.value===fontLibraryTab));
+ $('#library-font-list').innerHTML=list.length?list.map(f=>`<button class="library-font ${l?.font===f.family?'active':''}" data-action="choose-font" data-value="${esc(f.family)}" aria-label="Pakai ${esc(f.name)}"><span class="library-aa" style="font-family:${esc(f.family)}">Aa</span><span class="library-label"><strong>${esc(f.name)}</strong><small>${f.custom?'Font impor':'Font perangkat'}</small></span><span class="font-radio">${l?.font===f.family?icon('check'):''}</span></button>`).join(''):`<div class="font-empty">${icon('font')}<strong>${q?'Font tidak ditemukan':'Belum ada font impor'}</strong><p>${q?'Coba nama lain.':'Masukkan file font atau satu paket ZIP di atas.'}</p></div>`;
+}
+function openFontLibrary(){
+ if(!sel()||sel().type!=='text')return;fontReturnFocus=document.activeElement;fontLibraryOpen=true;libraryMotion?.cancel();++libraryEpoch;
+ const page=$('#font-page');page.hidden=false;page.inert=false;$('#editor').inert=true;$('#home').inert=true;renderFontLibrary();
+ if(!reducedMotion.matches)libraryMotion=page.animate([{opacity:.2,translate:'24px 0'},{opacity:1,translate:'0 0'}],{duration:260,easing:'cubic-bezier(.2,.8,.2,1)'});
+ $('#font-page [data-action="close-font-library"]').focus({preventScroll:true});
+}
+function closeFontLibrary(instant=false){
+ fontLibraryOpen=false;libraryMotion?.cancel();const epoch=++libraryEpoch;$('#editor').inert=false;$('#home').inert=false;const page=$('#font-page');
+ const finish=()=>{if(epoch===libraryEpoch){page.hidden=true;page.inert=false;}};
+ if(instant||reducedMotion.matches||page.hidden)finish();else{page.inert=true;libraryMotion=page.animate([{opacity:1,translate:'0 0'},{opacity:0,translate:'24px 0'}],{duration:180,easing:'ease-out'});libraryMotion.onfinish=finish;}
+ if(panel==='fonts')openPanel('fonts');
+ // The old panel DOM was refreshed; return to a current, visible control.
+ $('#panel [data-action="open-font-library"]')?.focus({preventScroll:true});fontReturnFocus=null;
+}
 function colorControls(color,prop,compact=false){
  const colors=['#000000','#ffffff','#ff3b30','#ff9500','#ffcc00','#34c759','#007aff','#af52de','#ff2d55'];
  return `<div class="swatches ${compact?'compact-swatches':''}" role="group" aria-label="Pilihan warna">${colors.map(c=>`<button class="swatch ${c.toLowerCase()===color.toLowerCase()?'active':''}" style="--swatch:${c}" data-action="swatch" data-color-prop="${prop}" data-value="${c}" aria-label="Warna ${c}" aria-pressed="${c.toLowerCase()===color.toLowerCase()}"><span></span></button>`).join('')}</div><div class="color-custom"><label class="native-color-wrap" title="Pilih warna bebas"><span class="color-wheel" aria-hidden="true"></span><input type="color" data-prop="${prop}" value="${color}" aria-label="Pilih warna bebas"></label><label class="hex-field"><span>HEX</span><input class="color-field" value="${color.toUpperCase()}" maxlength="7" aria-label="Kode warna HEX" data-hex="${prop}" spellcheck="false" autocomplete="off"></label></div>`;
@@ -195,7 +227,7 @@ function layersHTML(){const layers=[...p.layers].reverse();return `<p class="she
 let thumbnailToken=0;
 async function renderPresetThumbnails(){const token=++thumbnailToken,cp=E.copy(p);try{const r=await renderer.raw(cp,166,202);for(const preset of E.PRESETS){if(token!==thumbnailToken||panel!=='presets')return;const cv=$(`canvas[data-preset="${preset.id}"]`);if(!cv)continue;const ctx=cv.getContext('2d',{willReadFrequently:true});ctx.drawImage(r,0,0);const img=ctx.getImageData(0,0,166,202);E.processPixels(img.data,166,202,renderer.combined(cp,preset.id));ctx.putImageData(img,0,0);await raf();}}catch(e){console.warn(e);}}
 function readProp(key){if(key.startsWith('l.'))return sel()?.[key.slice(2)];if(key.startsWith('a.'))return p.adjust[key.slice(2)];if(key.startsWith('photo.'))return p.photo?.[key.slice(6)];return p[key];}
-function applyProp(key,value){if(!p)return;const l=sel();let photo=false;if(key.startsWith('l.')){if(!l||l.locked){toast('Buka kunci layer dulu.');return;}const k=key.slice(2);if(k==='w'&&l.type==='image')l.h=l.h*value/l.w;l[k]=value;}else if(key.startsWith('a.')){p.adjust[key.slice(2)]=value;photo=true;}else if(key.startsWith('photo.')){if(!p.photo)return;p.photo[key.slice(6)]=value;photo=true;}else if(key==='gradient-length'&&l?.type==='gradient'&&!l.locked){const dx=l.x2-l.x1,dy=l.y2-l.y1,dist=Math.hypot(dx,dy)||1;l.x1=l.x2-dx/dist*value/100;l.y1=l.y2-dy/dist*value/100;}else{p[key]=value;photo=['intensity','preset'].includes(key);}syncGradientPreview();scheduleSave();requestPaint(photo);}
+function applyProp(key,value){if(!p)return;const l=sel();let photo=false;if(key.startsWith('l.')){if(!l||l.locked){toast('Buka kunci layer dulu.');return;}const k=key.slice(2);if(k==='w'&&l.type==='image')l.h=l.h*value/l.w;l[k]=value;}else if(key.startsWith('a.')){p.adjust[key.slice(2)]=value;photo=true;}else if(key.startsWith('photo.')){if(!p.photo)return;p.photo[key.slice(6)]=value;photo=true;}else if(key==='gradient-angle'&&l?.type==='gradient'&&!l.locked){const length=Math.hypot((l.x2-l.x1)*p.w,(l.y2-l.y1)*p.h)||p.h*.5,cx=(l.x1+l.x2)/2,cy=(l.y1+l.y2)/2,r=value*Math.PI/180,dx=Math.cos(r)*length/2/p.w,dy=Math.sin(r)*length/2/p.h;l.x1=cx-dx;l.y1=cy-dy;l.x2=cx+dx;l.y2=cy+dy;}else if(key==='gradient-length'&&l?.type==='gradient'&&!l.locked){const dx=l.x2-l.x1,dy=l.y2-l.y1,dist=Math.hypot(dx,dy)||1;l.x1=l.x2-dx/dist*value/100;l.y1=l.y2-dy/dist*value/100;}else{p[key]=value;photo=['intensity','preset'].includes(key);}syncGradientPreview();scheduleSave();requestPaint(photo);}
 function syncControls(key,value,source){
  $$('[data-prop]').filter(el=>el.dataset.prop===key).forEach(el=>{if(el!==source)el.value=value;if(el.type==='range')el.style.setProperty('--fill',`${(Number(value)-Number(el.min))/(Number(el.max)-Number(el.min))*100}%`);});
  $$('[data-hex]').filter(el=>el.dataset.hex===key).forEach(el=>{if(el!==source)el.value=String(value).toUpperCase();});
@@ -224,11 +256,25 @@ function addGradient(){if(p.layers.length>=80)return;finishTyping();const l=E.gr
 function duplicateLayer(){const l=sel();if(!l)return;if(p.layers.length>=80){toast('Maksimal 80 layer.',true);return;}const n=E.copy(l);n.id=E.uid();n.locked=false;if(n.type!=='gradient'){n.x+=p.w*.025;n.y+=p.h*.025;}p.layers.splice(p.layers.indexOf(l)+1,0,n);selection=n.id;commit();if(panel)openPanel(panel);updateToolbar();requestPaint();}
 function deleteLayer(){const l=sel();if(!l)return;if(l.locked){toast('Buka kunci layer sebelum menghapus.');return;}p.layers=p.layers.filter(x=>x.id!==selection);selection=null;commit();if(panel==='layers')openPanel('layers');else closePanel();requestPaint();toast('Layer dihapus. Undo untuk mengembalikan.');}
 function gradientDirection(direction){const l=sel();if(!l||l.type!=='gradient'||l.locked)return;const dirs={bottom:[.5,.35,.5,1],top:[.5,.65,.5,0],left:[.65,.5,0,.5],right:[.35,.5,1,.5]};const a=dirs[direction];[l.x1,l.y1,l.x2,l.y2]=a;l.name=direction[0].toUpperCase()+direction.slice(1)+' fade';commit();openPanel('gradient');requestPaint();}
-async function enterProject(project){p=project;selection=null;mode='photo';panel='';stopSheet();sheetState.closing=false;motionFrom=null;typingView=null;lastToolbarKey='';typing=false;$('#typing').hidden=true;$('#panel').hidden=true;preview=null;rawPreview=null;renderer.invalidate();await renderer.prepare(p);history=[JSON.stringify(p)];historyIndex=0;$('#home').hidden=true;$('#editor').hidden=false;document.body.style.overflow='hidden';dirty=false;setSaveStatus('Tersimpan di perangkat');resetView();refreshUI();requestPaint(true);}
-async function demo(){busy(true,'Menyiapkan ruang kreatif...');try{await saveCurrent();let data;if(window.FRAME_DEMO_DATA)data=window.FRAME_DEMO_DATA;else{const response=await fetch('assets/demo.jpg');if(!response.ok)throw new Error('Contoh tidak bisa dimuat. Coba impor foto sendiri.');data=await fileData(await response.blob());}const id=E.uid();renderer.addAsset({id,kind:'image',name:'Architecture sample',data});const project=E.project(id);project.name='A little perspective';project.preset='street';project.intensity=35;const grad=E.gradientLayer();grad.opacity=80;grad.y1=.46;project.layers.push(grad);const title=E.textLayer(project,'Seeing.');title.x=85;title.y=979;title.w=920;title.size=176;title.spacing=-4;const kicker=E.textLayer(project,'THE ART OF');Object.assign(kicker,{x:94,y:932,w:820,size:21,font:'Arial',spacing:5});const sub=E.textLayer(project,'A DIFFERENT PERSPECTIVE');Object.assign(sub,{x:96,y:1201,w:820,size:12,font:'Arial',spacing:2});project.layers.push(kicker,title,sub);await enterProject(project);mode='design';updateToolbar();scheduleSave();}catch(e){report(e);}finally{busy(false);}}
+async function enterProject(project){p=project;selection=null;mode='photo';panel='';stopSheet();sheetState.closing=false;motionFrom=null;typingView=null;lastToolbarKey='';typing=false;$('#typing').hidden=true;$('#panel').hidden=true;preview=null;rawPreview=null;renderer.invalidate();await renderer.prepare(p);history=[JSON.stringify(p)];historyIndex=0;$('#home').hidden=true;$('#editor').hidden=false;$('#editor').classList.remove('panel-visible');$('#editor').scrollTop=0;$('#editor').scrollLeft=0;const ambient=renderer.assets.get(p.photo?.asset)?.data;$('#ambient').style.backgroundImage=ambient?`url("${ambient}")`:'';view.fitted=false;document.body.style.overflow='hidden';dirty=false;setSaveStatus('Tersimpan di perangkat');resetView();refreshUI();requestPaint(true);}
+async function demo(kind='palm'){
+ busy(true,'Membuka ruang kreatif...');
+ try{
+  await saveCurrent();const assetName=kind==='portrait'?'portrait':kind==='architecture'?'demo':'palm';let data=window.FRAME_SAMPLE_DATA?.[assetName];
+  if(!data&&assetName==='demo')data=window.FRAME_DEMO_DATA;
+  if(!data){const response=await fetch(`assets/${assetName}.jpg`);if(!response.ok)throw new Error('Contoh belum tersedia. Buka foto sendiri.');data=await fileData(await response.blob());}
+  const id=E.uid();renderer.addAsset({id,kind:'image',name:'FRAME example / '+assetName,data});
+  const project=E.project(id,1080,1920);project.name=kind==='portrait'?'Portrait notes':kind==='architecture'?'Perspective':'Golden hour';project.preset='original';project.intensity=100;
+  const grad=E.gradientLayer();grad.opacity=kind==='portrait'?46:27;grad.y1=.4;project.layers.push(grad);
+  const title=E.textLayer(project,kind==='portrait'?'Good photos.\nBetter stories.':kind==='architecture'?'A different\nperspective.':'Somewhere,\nslow.');
+  Object.assign(title,{x:110,y:kind==='portrait'?950:825,w:880,size:kind==='portrait'?116:132,spacing:-4,lineHeight:.98,font:'Georgia',italic:kind!=='portrait',align:kind==='palm'?'center':'left',color:'#ffffff'});
+  const sub=E.textLayer(project,'A LITTLE SPACE TO CREATE');Object.assign(sub,{x:114,y:kind==='portrait'?1250:1130,w:850,size:18,font:'Arial',spacing:4,align:kind==='palm'?'center':'left',color:'#ffffff'});
+  project.layers.push(title,sub);await enterProject(project);mode='photo';updateToolbar();scheduleSave();
+ }catch(e){report(e);}finally{busy(false);}
+}
 function fileData(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(new Error('File tidak dapat dibaca.'));r.readAsDataURL(blob);});}
 async function addImageAsset(file){if(!file)throw new Error('Pilih file foto.');if(file.size>30*1024*1024)throw new Error('Foto maksimal 30 MB. Gunakan versi lebih kecil.');let mime=file.type;if(!/^image\/(jpeg|png|webp|avif|gif)$/.test(mime)){const ext=file.name?.split('.').pop().toLowerCase();mime=({jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',avif:'image/avif',gif:'image/gif'})[ext];if(!mime)throw new Error('Gunakan JPG, PNG, WebP, atau AVIF. HEIC belum didukung di versi ini.');file=new Blob([file],{type:mime});}const id=E.uid(),data=await fileData(file);renderer.addAsset({id,kind:'image',name:file.name||'Photo',data});const im=await renderer.image(id);if(im.naturalWidth*im.naturalHeight>60000000)throw new Error('Foto di atas 60 megapiksel terlalu besar untuk versi ini.');return{id,im};}
-async function importPhoto(file){if(!file)return;busy(true);try{const {id,im}=await addImageAsset(file);if(photoAction==='replace'&&p){p.photo={asset:id,zoom:1,offsetX:0,offsetY:0,rotation:0};renderer.invalidate();commit();requestPaint(true);}else{await saveCurrent();const scale=Math.min(1,2160/Math.max(im.naturalWidth,im.naturalHeight)),w=Math.max(128,Math.round(im.naturalWidth*scale)),h=Math.max(128,Math.round(im.naturalHeight*scale));const project=E.project(id,w,h);project.name=(file.name||'Foto baru').replace(/\.[^.]+$/,'').slice(0,80);await enterProject(project);scheduleSave();}toast('Foto siap diedit.');}catch(e){report(e);}finally{busy(false);$('#photo-input').value='';photoAction='new';}}
+async function importPhoto(file){if(!file)return;busy(true);try{const {id,im}=await addImageAsset(file);if(photoAction==='replace'&&p){p.photo={asset:id,zoom:1,offsetX:0,offsetY:0,rotation:0};$('#ambient').style.backgroundImage=`url("${renderer.assets.get(id).data}")`;renderer.invalidate();commit();requestPaint(true);}else{await saveCurrent();const scale=Math.min(1,2160/Math.max(im.naturalWidth,im.naturalHeight)),w=Math.max(128,Math.round(im.naturalWidth*scale)),h=Math.max(128,Math.round(im.naturalHeight*scale));const project=E.project(id,w,h);project.name=(file.name||'Foto baru').replace(/\.[^.]+$/,'').slice(0,80);await enterProject(project);scheduleSave();}toast('Foto siap diedit.');}catch(e){report(e);}finally{busy(false);$('#photo-input').value='';photoAction='new';}}
 let replacingLayer=false;
 async function importImageLayer(file){if(!file||!p)return;busy(true,'Menambahkan gambar...');try{const {id,im}=await addImageAsset(file),old=replacingLayer?sel():null;if(old?.type==='image'){old.asset=id;old.h=old.w*im.naturalHeight/im.naturalWidth;}else{if(p.layers.length>=80)throw new Error('Maksimal 80 layer.');const w=p.w*.55,h=w*im.naturalHeight/im.naturalWidth;const l={id:E.uid(),type:'image',asset:id,name:file.name||'Gambar',x:(p.w-w)/2,y:(p.h-h)/2,w,h,rotation:0,opacity:100,visible:true,locked:false};p.layers.push(l);selection=l.id;mode='design';}commit();closePanel();requestPaint();toast('Gambar ditambahkan.');}catch(e){report(e);}finally{busy(false);$('#layer-input').value='';replacingLayer=false;}}
 let pendingFontZip=null;
@@ -305,14 +351,14 @@ async function addFontBatch(files,errors=[],applySingle=false){
     }catch(e){errors.push({name:file.name,reason:e.message||'Font rusak atau tidak didukung'});}
   }
   if(imported.length){if(applySingle&&sel()?.type==='text'&&!sel().locked)sel().font=imported[0].family;commit();}
-  openPanel('fonts');requestPaint();busy(false);
+  openPanel('fonts');renderFontLibrary();requestPaint();busy(false);
   if(errors.length){
     modal(imported.length?`${imported.length} font ditambahkan`:'Ada font yang belum masuk',`<p>${duplicates.length?duplicates.length+' font duplikat dilewati. ':''}Font yang berhasil sudah tersedia di daftar. File yang tidak valid tidak mengubah desain.</p><div class="import-results">${errors.map(e=>`<p><strong>${esc(e.name)}</strong><br>${esc(e.reason)}</p>`).join('')}</div><button class="primary full" data-action="close-modal">Kembali ke font</button>`);
   }else if(imported.length){toast(`${imported.length} font siap dipakai.${duplicates.length?' '+duplicates.length+' duplikat dilewati.':''}`);}
   else if(duplicates.length){toast('Semua font ini sudah ada. Tidak ditambahkan dua kali.');}
 }
 
-async function home(force=false){finishTyping();closeModal();await saveCurrent();if(dirty&&!dbOK&&!force){modal('Draft belum tersimpan',`<p>Browser ini belum berhasil menyimpan proyek. Buat backup .frame sebelum keluar agar editan tidak hilang.</p><button class="primary full" data-action="backup">${icon('download')} Simpan backup</button><button class="secondary full" data-action="close-modal">Kembali mengedit</button><button class="text-button" data-action="home-force">Keluar tanpa menyimpan draft</button>`);return;}$('#editor').hidden=true;$('#home').hidden=false;document.body.style.overflow='';await renderRecent();}
+async function home(force=false){closeFontLibrary(true);finishTyping();closeModal();await saveCurrent();if(dirty&&!dbOK&&!force){modal('Draft belum tersimpan',`<p>Browser ini belum berhasil menyimpan proyek. Buat backup .frame sebelum keluar agar editan tidak hilang.</p><button class="primary full" data-action="backup">${icon('download')} Simpan backup</button><button class="secondary full" data-action="close-modal">Kembali mengedit</button><button class="text-button" data-action="home-force">Keluar tanpa menyimpan draft</button>`);return;}$('#editor').hidden=true;$('#home').hidden=false;document.body.style.overflow='';await renderRecent();}
 async function renderRecent(){let rows=[];try{rows=await store.all();dbOK=true;}catch(e){dbOK=false;console.warn(e);}$('#recent-projects').innerHTML=rows.length?rows.map(row=>`<article class="recent-card"><button class="open-project" data-action="open-project" data-id="${esc(row.id)}">${row.thumbnail?`<img src="${esc(row.thumbnail)}" alt="Pratinjau ${esc(row.name)}" loading="lazy">`:''}<span class="recent-card-info"><strong>${esc(row.name)}</strong><small>${row.w} x ${row.h} &middot; ${new Date(row.updated).toLocaleDateString('id-ID',{day:'numeric',month:'short'})}</small></span></button><button class="icon-button" data-action="delete-project-confirm" data-id="${esc(row.id)}" aria-label="Hapus proyek ${esc(row.name)}">${icon('trash')}</button></article>`).join(''):`<div class="empty-projects">${icon('layers')}<div><strong>${dbOK?'Belum ada proyek. Mulai satu cerita.':'Penyimpanan lokal belum tersedia.'}</strong><p>${dbOK?'Editan tersimpan otomatis di browser ini.':'Editing tetap bisa. Simpan backup .frame sebelum menutup.'}</p></div></div>`;}
 async function loadProject(id){busy(true,'Membuka proyek...');try{const row=await store.get('projects',id);if(!row)throw new Error('Proyek tidak ditemukan di browser ini.');for(const aid of E.assetIds(row.project)){const a=await store.get('assets',aid);if(!a)throw new Error('Aset proyek hilang. Pulihkan dari backup .frame.');renderer.addAsset(a);}await enterProject(E.copy(row.project));}catch(e){report(e);}finally{busy(false);}}
 let modalFocus=null;
@@ -335,18 +381,26 @@ async function shareExport(){if(!exportBlob)return;try{const file=new File([expo
 async function backup(){if(!p)return;finishTyping();const raw={app:'FRAME',version:1,project:E.copy(p),assets:E.assetIds(p).map(id=>renderer.assets.get(id)).filter(Boolean)};const blob=new Blob([JSON.stringify(raw)],{type:'application/json'});download(blob,(p.name.replace(/[^a-zA-Z0-9_-]+/g,'-')||'FRAME')+'.frame');toast('Backup dibuat. Simpan file .frame di tempat aman.');}
 async function importBackup(file){if(!file)return;busy(true,'Membuka backup...');try{if(file.size>150*1024*1024)throw new Error('Backup maksimal 150 MB.');const raw=E.validate(JSON.parse(await file.text()));await saveCurrent();raw.assets.forEach(a=>renderer.addAsset(a));raw.project.id=E.uid();await enterProject(raw.project);scheduleSave();toast('Backup dibuka sebagai proyek baru.');}catch(e){report(e);}finally{busy(false);$('#project-input').value='';}}
 function projectMenu(){if(!p)return;modal('Proyek',`<label class="field-label" for="rename-project">NAMA PROYEK</label><div class="row"><input id="rename-project" class="text-field" maxlength="80" value="${esc(p.name)}"><button class="primary" data-action="rename">Simpan</button></div><p><span class="status-chip">${icon('lock')} Penyimpanan lokal</span></p><button class="project-menu-btn" data-action="backup">Simpan backup .frame ${icon('download')}</button><button class="project-menu-btn" data-action="duplicate-project">Duplikat proyek ${icon('duplicate')}</button><button class="project-menu-btn" data-action="help">Panduan singkat ${icon('help')}</button><p>Draft disimpan di browser ini, bukan cloud. Menghapus data browser dapat menghapus proyek. Backup menyertakan foto, layer, dan font impor.</p>`);}
-function help(){modal('Ruang kecil. Ide besar.',`<span class="eyebrow">FRAME / PHOTO + TYPE / V0.3 / FLUID</span>${[['image','Mulai dari foto','Buka JPG, PNG, WebP, atau AVIF. Editan tidak dikirim ke server.'],['text','Teks langsung di foto','Ketuk Teks, tulis, lalu Selesai. Ketuk dua kali tulisan untuk mengedit lagi.'],['position','Geser & atur','Satu jari menggeser objek. Handle sudut mengubah ukuran. Dua jari khusus zoom kanvas.'],['layers','Tetap bisa diubah','Foto, gradient, dan teks tetap terpisah. Undo mengembalikan satu tindakan.'],['download','Jangan lupa backup','Ekspor PNG/JPG untuk gambar jadi. Backup .frame untuk melanjutkan editing nanti.']].map(([i,t,d])=>`<div class="help-item">${icon(i)}<div><strong>${t}</strong><p>${d}</p></div></div>`).join('')}<p>Font bawaan memakai font sistem; tampilan dapat berbeda antarpiranti. Font impor, termasuk dari ZIP, tersimpan bersama proyek. Untuk offline/PWA, situs perlu dimuat dari HTTPS dan cache harus selesai terpasang. Dukungan bergantung pada browser.</p><p><span class="shortcut">Ctrl / Cmd + Z</span> Undo &nbsp; <span class="shortcut">Delete</span> Hapus layer</p><button class="primary full" data-action="close-modal">Oke, mulai berkarya</button>`);}
+function help(){modal('Ruang kecil. Ide besar.',`<span class="eyebrow">FRAME / PHOTO + TYPE / V0.3.1</span>${[['image','Mulai dari foto','Buka JPG, PNG, WebP, atau AVIF. Editan tidak dikirim ke server.'],['text','Teks langsung di foto','Ketuk Teks, tulis, lalu Selesai. Ketuk dua kali tulisan untuk mengedit lagi.'],['position','Geser & atur','Satu jari menggeser objek. Handle sudut mengubah ukuran. Dua jari khusus zoom kanvas.'],['layers','Tetap bisa diubah','Foto, gradient, dan teks tetap terpisah. Undo mengembalikan satu tindakan.'],['download','Jangan lupa backup','Ekspor PNG/JPG untuk gambar jadi. Backup .frame untuk melanjutkan editing nanti.']].map(([i,t,d])=>`<div class="help-item">${icon(i)}<div><strong>${t}</strong><p>${d}</p></div></div>`).join('')}<p>Font bawaan memakai font sistem; tampilan dapat berbeda antarpiranti. Font impor, termasuk dari ZIP, tersimpan bersama proyek. Untuk offline/PWA, situs perlu dimuat dari HTTPS dan cache harus selesai terpasang. Dukungan bergantung pada browser.</p><p><span class="shortcut">Ctrl / Cmd + Z</span> Undo &nbsp; <span class="shortcut">Delete</span> Hapus layer</p><button class="primary full" data-action="close-modal">Oke, mulai berkarya</button>`);}
 async function action(a,button){
  if(a.startsWith('panel-')){openPanel(a.slice(6));return;}
  if(a.startsWith('weight-')){const l=sel();if(l&&!l.locked){l.weight=Number(a.slice(7));commit();openPanel('type');requestPaint();}return;}
  if(a.startsWith('align-')){const l=sel();if(l&&!l.locked){l.align=a.slice(6);commit();openPanel(panel||'type');requestPaint();}return;}
  if(a.startsWith('gradient-')&&['bottom','top','left','right'].includes(a.slice(9))){gradientDirection(a.slice(9));return;}
  switch(a){
+ case 'open-font-library':openFontLibrary();break;
+ case 'close-font-library':closeFontLibrary();break;
+ case 'font-filter':fontLibraryTab=button.dataset.value;renderFontLibrary();break;
+ case 'import-font-file':$('#font-input').accept='.ttf,.otf,.woff,.woff2';$('#font-input').multiple=true;$('#font-input').click();break;
+ case 'import-font-zip':$('#font-input').accept='.zip,application/zip';$('#font-input').multiple=false;$('#font-input').click();break;
+ case 'search-projects':{const el=$('.home-search');el.hidden=!el.hidden;if(!el.hidden)$('#project-search').focus();break;}
+ case 'show-projects':$('#projects-section').scrollIntoView({behavior:reducedMotion.matches?'instant':'smooth',block:'start'});break;
+ case 'home-top':window.scrollTo({top:0,behavior:reducedMotion.matches?'instant':'smooth'});break;
  case 'new-photo':photoAction='new';$('#photo-input').click();break;
  case 'replace-photo':photoAction='replace';$('#photo-input').click();break;
  case 'add-image':replacingLayer=false;$('#layer-input').click();break;
  case 'replace-layer':if(sel()?.locked){toast('Buka kunci layer dulu.');break;}replacingLayer=true;$('#layer-input').click();break;
- case 'demo':await demo();break;
+ case 'demo':await demo(button.dataset.demo||'palm');break;
  case 'home':if(typing){finishTyping();break;}await home();break;
  case 'home-force':await home(true);break;
  case 'help':help();break;
@@ -355,7 +409,7 @@ async function action(a,button){
  case 'close-panel':closePanel();break;
  case 'undo':historyMove(-1);break;
  case 'redo':historyMove(1);break;
- case 'fit':visualTransition();resetView();break;
+ case 'fit':visualTransition();view.fitted=!view.fitted;resetView();break;
  case 'deselect':finishTyping();selection=null;closePanel();requestPaint();break;
  case 'expand-panel':sheetExpansion(!sheetState.expanded);break;
  case 'mode-photo':case 'mode-design':finishTyping();mode=a==='mode-photo'?'photo':'design';selection=null;closePanel();requestPaint();break;
@@ -372,8 +426,8 @@ async function action(a,button){
  case 'adjust-tab':adjustTab=button.dataset.value;openPanel('adjust');break;
  case 'reset-adjust':p.adjust=E.copy(E.DEFAULT_ADJUST);commit();openPanel('adjust');requestPaint(true);break;
  case 'reset-tone':p.adjust=E.copy(E.DEFAULT_ADJUST);p.preset='original';p.intensity=100;commit();openPanel('presets');requestPaint(true);toast('Tone kembali ke foto asli.');break;
- case 'choose-font':{const l=sel();if(l&&!l.locked){l.font=button.dataset.value;commit();$('#font-list').innerHTML=fontOptions($('#font-search')?.value||'');requestPaint();}break;}
- case 'import-font':$('#font-input').click();break;
+ case 'choose-font':{const l=sel();if(l&&!l.locked){l.font=button.dataset.value;commit();if($('#font-list'))$('#font-list').innerHTML=quickFonts();renderFontLibrary();requestPaint();}break;}
+ case 'import-font':$('#font-input').accept='.ttf,.otf,.woff,.woff2,.zip';$('#font-input').multiple=true;$('#font-input').click();break;
  case 'zip-import-selected':await confirmFontZip();break;
  case 'zip-select-toggle':{const checks=$$('.zip-font-check'),any=checks.some(c=>c.checked);checks.forEach((c,i)=>c.checked=!any&&i<(pendingFontZip?.capacity||0));updateZipSelection();break;}
  case 'swatch':{const key=button.dataset.colorProp||'l.color';if(sel()?.locked){toast('Buka kunci layer dulu.');break;}applyProp(key,button.dataset.value);syncControls(key,button.dataset.value,button);commit();break;}
@@ -404,7 +458,7 @@ async function action(a,button){
  }
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!b||b.disabled)return;action(b.dataset.action,b).catch(report);});
-document.addEventListener('input',e=>{const t=e.target;if(t.id==='text-input'){const l=sel();if(l?.type==='text'){l.text=t.value;l.name=t.value.slice(0,32);$('#typing-count').textContent=t.value.length;scheduleSave();requestPaint();}return;}if(t.id==='font-search'){$('#font-list').innerHTML=fontOptions(t.value);return;}if(t.dataset.prop){const key=t.dataset.prop;if(key==='export-quality'){exportQuality=E.clamp(Number(t.value),65,100)/100;syncControls(key,Number(t.value),t);return;}let value;if(t.type==='color')value=t.value;else{if(t.value===''||!Number.isFinite(Number(t.value)))return;value=E.clamp(Number(t.value),Number(t.min),Number(t.max));}if(sel()?.locked&&key.startsWith('l.')){t.value=readProp(key);return;}applyProp(key,value);syncControls(key,value,t);}});
+document.addEventListener('input',e=>{const t=e.target;if(t.id==='project-search'){const q=t.value.toLowerCase();$$('.recent-card').forEach(c=>c.hidden=!c.textContent.toLowerCase().includes(q));return;}if(t.id==='library-search'){renderFontLibrary();return;}if(t.id==='text-input'){const l=sel();if(l?.type==='text'){l.text=t.value;l.name=t.value.slice(0,32);$('#typing-count').textContent=t.value.length;scheduleSave();requestPaint();}return;}if(t.id==='font-search'){$('#font-list').innerHTML=fontOptions(t.value);return;}if(t.dataset.prop){const key=t.dataset.prop;if(key==='export-quality'){exportQuality=E.clamp(Number(t.value),65,100)/100;syncControls(key,Number(t.value),t);return;}let value;if(t.type==='color')value=t.value;else{if(t.value===''||!Number.isFinite(Number(t.value)))return;value=E.clamp(Number(t.value),Number(t.min),Number(t.max));}if(sel()?.locked&&key.startsWith('l.')){t.value=readProp(key);return;}applyProp(key,value);syncControls(key,value,t);}});
 document.addEventListener('change',e=>{const t=e.target;if(t.classList.contains('zip-font-check'))updateZipSelection();if(t.dataset.prop&&t.dataset.prop!=='export-quality'){if(t.type==='number'&&t.value===''){t.value=readProp(t.dataset.prop);return;}commit();}if(t.dataset.hex){const value=t.value.trim();if(/^#[0-9a-fA-F]{6}$/.test(value)){if(sel()?.locked){t.value=readProp(t.dataset.hex);toast('Buka kunci layer dulu.');return;}applyProp(t.dataset.hex,value.toLowerCase());syncControls(t.dataset.hex,value.toLowerCase(),null);commit();}else{t.value=readProp(t.dataset.hex);toast('Gunakan HEX 6 digit, misalnya #ffffff.',true);}}if(t.id==='snap-toggle')snap=t.checked;if(t.dataset.toggle&&sel()&&!sel().locked){sel()[t.dataset.toggle]=t.checked;commit();requestPaint();}if(t.id==='export-size'){exportFactor=Number(t.value);$('#export-dimensions').textContent=`${Math.round(p.w*exportFactor)} x ${Math.round(p.h*exportFactor)} px`;}});
 $('#photo-input').addEventListener('change',e=>importPhoto(e.target.files[0]));$('#layer-input').addEventListener('change',e=>importImageLayer(e.target.files[0]));$('#font-input').addEventListener('change',e=>importFontFiles(e.target.files));$('#project-input').addEventListener('change',e=>importBackup(e.target.files[0]));
 const interaction=$('#interaction');
@@ -419,7 +473,7 @@ interaction.addEventListener('pointerdown',e=>{
 });
 interaction.addEventListener('pointermove',e=>{
  if(!pointers.has(e.pointerId)||!gesture||!p)return;e.preventDefault();const pos=pointerPosition(e);pointers.set(e.pointerId,pos);const g=gesture;
- if(g.kind==='pinch'&&pointers.size>=2){const [a,b]=[...pointers.values()],mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};view.zoom=E.clamp(g.zoom*Math.hypot(a.x-b.x,a.y-b.y)/Math.max(1,g.distance),1,6);const s=view.fit*view.zoom;view.panX=mid.x-(view.width-p.w*s)/2-g.anchor.x*s;view.panY=mid.y-((view.contentHeight||view.height)-32-p.h*s)/2-g.anchor.y*s;requestPaint();return;}
+ if(g.kind==='pinch'&&pointers.size>=2){const [a,b]=[...pointers.values()],mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};view.zoom=E.clamp(g.zoom*Math.hypot(a.x-b.x,a.y-b.y)/Math.max(1,g.distance),1,6);const s=view.fit*view.zoom;view.panX=mid.x-(view.width-p.w*s)/2-g.anchor.x*s;view.panY=mid.y-(view.centerY-p.h*s/2)-g.anchor.y*s;requestPaint();return;}
  if(pointers.size!==1||g.kind==='pinch'||g.kind==='idle')return;if(Math.hypot(pos.x-g.start.x,pos.y-g.start.y)<3&&!g.moved)return;g.moved=true;
  if(g.kind==='pan'){if(view.zoom>1.01){view.panX=g.panX+pos.x-g.start.x;view.panY=g.panY+pos.y-g.start.y;requestPaint();}return;}
  const l=p.layers.find(x=>x.id===g.target);if(!l||l.locked)return;const pt=docPoint(pos.x,pos.y),ini=g.initial;guides={x:false,y:false};
@@ -433,12 +487,13 @@ interaction.addEventListener('pointermove',e=>{
 function pointerEnd(e){if(!pointers.has(e.pointerId))return;const g=gesture;pointers.delete(e.pointerId);if(g?.kind==='pinch'){if(pointers.size)gesture={kind:'idle'};else gesture=null;requestPaint();return;}if(pointers.size)return;if(g?.moved&&g.target){commit();if(panel&&panel!=='fonts')openPanel(panel);}else if(g&&!g.moved){if(g.kind==='pan'){selection=null;closePanel();}else if(g.target){const now=performance.now();if(lastTap.id===g.target&&now-lastTap.time<340&&sel()?.type==='text'){startTyping();lastTap={id:null,time:0};}else lastTap={id:g.target,time:now};}}if(g?.viewSnapshot)visualTransition();gesture=null;guides={x:false,y:false};requestPaint();}
 interaction.addEventListener('pointerup',pointerEnd);interaction.addEventListener('pointercancel',e=>{pointers.clear();if(gesture?.moved&&gesture.target)commit();gesture=null;guides={x:false,y:false};requestPaint();});interaction.addEventListener('contextmenu',e=>e.preventDefault());
 interaction.addEventListener('dblclick',e=>{if(sel()?.type==='text'&&!typing){e.preventDefault();startTyping();}});
-interaction.addEventListener('wheel',e=>{if(!p)return;e.preventDefault();const pos=pointerPosition(e),anchor=docPoint(pos.x,pos.y);view.zoom=E.clamp(view.zoom*Math.exp(-e.deltaY*.0015),1,6);const s=view.fit*view.zoom;view.panX=pos.x-(view.width-p.w*s)/2-anchor.x*s;view.panY=pos.y-((view.contentHeight||view.height)-32-p.h*s)/2-anchor.y*s;if(view.zoom===1){view.panX=0;view.panY=0;}requestPaint();},{passive:false});
+interaction.addEventListener('wheel',e=>{if(!p)return;e.preventDefault();const pos=pointerPosition(e),anchor=docPoint(pos.x,pos.y);view.zoom=E.clamp(view.zoom*Math.exp(-e.deltaY*.0015),1,6);const s=view.fit*view.zoom;view.panX=pos.x-(view.width-p.w*s)/2-anchor.x*s;view.panY=pos.y-(view.centerY-p.h*s/2)-anchor.y*s;if(view.zoom===1){view.panX=0;view.panY=0;}requestPaint();},{passive:false});
 const compare=$('#compare');compare.addEventListener('pointerdown',e=>{e.preventDefault();compare.setPointerCapture(e.pointerId);before=true;compare.querySelector('span:last-child').textContent='Tanpa efek';requestPaint();});function endCompare(){before=false;compare.querySelector('span:last-child').textContent='Asli';requestPaint();}compare.addEventListener('pointerup',endCompare);compare.addEventListener('pointercancel',endCompare);compare.addEventListener('lostpointercapture',endCompare);
 compare.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();before=true;requestPaint();}});compare.addEventListener('keyup',endCompare);
 document.addEventListener('keydown',e=>{
  const dlg=$('.modal');if(dlg){if(e.key==='Escape'){closeModal();return;}if(e.key==='Tab'){const focusable=$$('button:not([disabled]), input, select, textarea, a[href]',dlg),first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}return;}
- const input=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.key==='Escape'){if(typing)finishTyping();else if(panel)closePanel();else if(selection){selection=null;updateToolbar();requestPaint();}return;}if(input||!p||$('#editor').hidden)return;
+ if(fontLibraryOpen){if(e.key==='Escape'){closeFontLibrary();return;}if(e.key==='Tab'){const fs=$$('button:not([disabled]),input', $('#font-page')),f=fs[0],l=fs.at(-1);if(e.shiftKey&&document.activeElement===f){e.preventDefault();l?.focus();}else if(!e.shiftKey&&document.activeElement===l){e.preventDefault();f?.focus();}}return;}
+ const input=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.key==='Escape'){if(fontLibraryOpen){closeFontLibrary();return;}if(typing)finishTyping();else if(panel)closePanel();else if(selection){selection=null;updateToolbar();requestPaint();}return;}if(input||!p||$('#editor').hidden)return;
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();historyMove(e.shiftKey?1:-1);}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();historyMove(1);}else if(['Delete','Backspace'].includes(e.key)&&selection){e.preventDefault();deleteLayer();}else if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){const l=sel();if(l&&l.type!=='gradient'&&!l.locked){e.preventDefault();const step=e.shiftKey?10:1;l.x+=(e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0);l.y+=(e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0);commit();requestPaint();}}});
 
 const sheet=$('#panel');let suppressGripClick=false;
@@ -475,5 +530,5 @@ window.addEventListener('resize',viewport);window.visualViewport?.addEventListen
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(typing)commit();saveCurrent();}});window.addEventListener('pagehide',()=>saveCurrent());window.addEventListener('beforeunload',e=>{if(dirty&&!dbOK){e.preventDefault();e.returnValue='';}});
 hydrate();viewport();renderRecent();
 if('serviceWorker'in navigator&&(location.protocol==='https:'||['localhost','127.0.0.1'].includes(location.hostname))&&!window.FRAME_PORTABLE){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(e=>console.warn('Offline shell not installed:',e)));}
-window.FRAME={version:'0.3.0',getState:()=>p?E.copy(p):null,getSelection:()=>selection,getUI:()=>({panel,typing,mode,reducedMotion:reducedMotion.matches,sheetY:sheetState.y,sheetExpanded:sheetState.expanded}),getView:()=>({...view}),getHistory:()=>({length:history.length,index:historyIndex}),ready:()=>!previewRunning&&!previewWanted,save:saveCurrent,renderer,store};
+window.FRAME={version:'0.3.1',getState:()=>p?E.copy(p):null,getSelection:()=>selection,getUI:()=>({panel,typing,mode,fontLibraryOpen,reducedMotion:reducedMotion.matches,sheetY:sheetState.y,sheetExpanded:sheetState.expanded}),getView:()=>({...view}),getHistory:()=>({length:history.length,index:historyIndex}),ready:()=>!previewRunning&&!previewWanted,save:saveCurrent,renderer,store};
 })();
