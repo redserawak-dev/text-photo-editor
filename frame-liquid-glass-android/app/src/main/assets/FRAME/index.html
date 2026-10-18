@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#ede9fe">
+  <meta name="description" content="FRAME: editor foto dan tipografi yang bekerja di perangkat Anda.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>FRAME - Photo + Type / Liquid Glass</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <main id="home" class="home">
+    <header class="home-top"><div class="wordmark">FRAME<span class="wordmark-dot"></span></div><span class="eyebrow">PHOTO + TYPE</span><button class="icon-button" data-action="help" aria-label="Tentang FRAME" data-icon="help"></button></header>
+    <section class="home-hero">
+      <div class="hero-intro"><span class="eyebrow">FRAME / FLUID</span><h1>Foto lo.<br><em>Rasa yang baru.</em></h1><p>Warna, cahaya, kata. Semuanya mengalir.</p></div>
+      <button class="hero-art" data-action="demo" aria-label="Buka contoh desain editorial">
+        <img src="assets/demo.jpg" alt="Arsitektur dengan cahaya dan bayangan" draggable="false">
+        <div class="hero-art-shade"></div>
+        <span class="hero-art-tag"><span data-icon="image"></span> Satu foto. Perspektif baru.</span>
+        <div class="hero-art-type"><span>THE ART OF</span><strong>Seeing.</strong><small>A DIFFERENT PERSPECTIVE</small></div>
+        <div class="art-caption"><span><span class="sample-avatar">f.</span> Dibuat dengan FRAME</span><span class="art-arrow" data-icon="arrow-up"></span></div>
+      </button>
+      <div class="hero-actions"><button class="primary large" data-action="new-photo">Mulai dari foto <span data-icon="plus"></span></button><button class="text-button" data-action="demo">Coba contoh <span data-icon="arrow"></span></button><div class="privacy-line"><span data-icon="lock"></span> Tanpa akun. Foto tetap di perangkat.</div></div>
+    </section>
+    <section class="recent-section"><div class="section-heading"><h2>Proyek lo</h2><button class="text-button" data-action="import-project"><span data-icon="folder"></span> Buka backup</button></div><div id="recent-projects" class="recent-grid"></div></section>
+    <footer class="home-footer"><span>A LITTLE SPACE TO CREATE.</span><button class="text-button" data-action="help">FRAME <span class="version">0.3 / Fluid</span></button></footer>
+  </main>
+  <main id="editor" class="editor" hidden>
+    <header class="editor-top"><button class="icon-button" data-action="home" aria-label="Kembali ke proyek" data-icon="back"></button><button class="project-title" data-action="project"><strong>FRAME</strong><span id="project-name">Untitled</span></button><div class="top-actions"><button id="undo" class="icon-button" data-action="undo" aria-label="Urungkan" data-icon="undo"></button><button id="redo" class="icon-button" data-action="redo" aria-label="Ulangi" data-icon="redo"></button><button class="primary export-top" data-action="export" aria-label="Ekspor gambar" title="Ekspor gambar"><span data-icon="share"></span><span class="sr-only">Ekspor</span></button></div></header>
+    <div class="document-meta"><span id="document-label">1080 &times; 1350</span><span id="save-status" role="status">Tersimpan di perangkat</span></div>
+    <section id="stage" class="stage" aria-label="Pratinjau desain interaktif">
+      <canvas id="artwork" aria-label="Hasil edit foto"></canvas><canvas id="interaction" aria-label="Geser objek; dua jari untuk zoom" tabindex="0"></canvas>
+      <div id="stage-empty" hidden>Mulai dengan foto atau teks.</div>
+      <div class="stage-controls"><button id="compare" class="mini-button" aria-label="Tahan untuk melihat foto tanpa efek"><span data-icon="compare"></span><span>Asli</span></button><button class="mini-button" data-action="fit" id="fit-button">Fit <span id="zoom-label">100%</span></button></div>
+      <span id="render-status" class="render-status" hidden>Mengolah tone...</span>
+    </section>
+    <div id="panel" class="bottom-sheet" role="region" aria-label="Pengaturan alat" hidden></div>
+    <div id="typing" class="typing-panel" hidden><div class="typing-heading"><span>Edit teks <span id="typing-count"></span></span><button class="primary" data-action="typing-done">Selesai</button></div><textarea id="text-input" rows="2" maxlength="10000" autocomplete="off" spellcheck="false" aria-label="Isi teks pada desain" placeholder="Tulis sesuatu..."></textarea><p class="micro-note">Enter untuk baris baru. Hasil langsung terlihat di foto.</p></div>
+    <footer id="editor-bottom" class="editor-bottom"><div class="dock-context"><div id="mode-switch" class="mode-switch" aria-label="Mode editor"><button data-action="mode-photo" class="active"><span data-icon="image"></span> Foto</button><button data-action="mode-design"><span data-icon="text"></span> Desain</button></div><div id="selection-context" class="selection-context" hidden><span id="selection-label"></span><button class="icon-button" data-action="deselect" aria-label="Selesai memilih layer" data-icon="check"></button></div></div><div id="toolbar" class="toolbar" aria-label="Alat editing"></div></footer>
+  </main>
+</div>
+<input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/avif,image/gif" hidden>
+<input id="layer-input" type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden>
+<input id="font-input" type="file" accept=".ttf,.otf,.woff,.woff2,.zip,application/zip,application/x-zip-compressed" multiple hidden>
+<input id="project-input" type="file" accept=".frame,.json,application/json" hidden>
+<div id="modal-root"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="busy" class="busy" hidden><div class="busy-card"><span class="spinner"></span><h2 id="busy-title">Menyiapkan foto...</h2><p id="busy-note">Sebentar, ya.</p></div></div>
+<noscript>FRAME membutuhkan JavaScript untuk mengedit foto secara lokal.</noscript>
+<script src="engine.js"></script><script src="font-zip.js"></script><script src="app.js"></script>
+</body>
+</html>
