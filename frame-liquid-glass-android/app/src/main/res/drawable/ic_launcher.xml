@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Rounded square, blue -> purple gradient -->
+    <path android:pathData="M24,4 H84 A20,20 0 0 1 104,24 V84 A20,20 0 0 1 84,104 H24 A20,20 0 0 1 4,84 V24 A20,20 0 0 1 24,4 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startColor="#007AFF"
+                android:endColor="#AF52DE"
+                android:type="linear"
+                android:angle="135" />
+        </aapt:attr>
+    </path>
+    <!-- Top glass highlight -->
+    <path
+        android:pathData="M24,4 H84 A20,20 0 0 1 104,24 V44 H4 V24 A20,20 0 0 1 24,4 Z"
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.28" />
+    <!-- F letter, white -->
+    <path
+        android:pathData="M36,76 V32 H72 V42 H46 V50 H64 V60 H46 V76 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Small dot accent -->
+    <path
+        android:pathData="M72,72 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9" />
+</vector>
