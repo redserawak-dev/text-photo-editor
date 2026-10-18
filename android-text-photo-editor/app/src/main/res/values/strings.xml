@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Text Photo Editor</string>
+    <string name="export_png">Export PNG</string>
+    <string name="png_saved">PNG tersimpan</string>
+    <string name="png_failed">Gagal menyimpan PNG</string>
+    <string name="pick_image">Pilih gambar</string>
+    <string name="remove_image">Hapus gambar</string>
+    <string name="add_text">Tambah teks</string>
+    <string name="center_text">Posisi teks ke tengah</string>
+</resources>

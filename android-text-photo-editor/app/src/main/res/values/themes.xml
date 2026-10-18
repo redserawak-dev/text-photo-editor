@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.TextPhotoEditor" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">#111111</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#111111</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
+</resources>
